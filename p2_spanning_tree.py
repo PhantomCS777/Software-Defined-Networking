@@ -1,6 +1,6 @@
 from ryu.base import app_manager
 from ryu.controller import ofp_event, event
-from ryu.controller.handler import MAIN_DISPATCHER
+from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet
@@ -251,6 +251,30 @@ class SimpleController(app_manager.RyuApp):
         self.logger.info(f"Switch entered: {dpid}")
         self.create_spanning_tree()
 
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        datapath = ev.msg.datapath
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        self.logger.info("Calling switch features handler")
+        # install the table-miss flow entry.
+        match = parser.OFPMatch()
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
+                                          ofproto.OFPCML_NO_BUFFER)]
+        self.add_flow(datapath, 0, match, actions)
+    
+    def add_flow(self, datapath, priority, match, actions):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        # construct flow_mod message and send it.
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
+                                             actions)]
+        mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
+                                match=match, instructions=inst)
+        datapath.send_msg(mod)
+
     @set_ev_cls(event.EventHostAdd)
     def host_add_handler(self, ev):
         host = ev.host
@@ -279,31 +303,36 @@ class SimpleController(app_manager.RyuApp):
         dpid = datapath.id
         self.mac_to_port.setdefault(dpid, {})
 
-        self.logger.info("packet in %s %s %s %s", dpid, src, dst, msg.in_port)
+        in_port = msg.match['in_port']
+
+        # self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
 
         # learn a mac address to avoid FLOOD next time.
-        self.mac_to_port[dpid][src] = msg.in_port
+        self.mac_to_port[dpid][src] = in_port
         dst_found = True
 
         if dst in self.mac_to_port[dpid]:
+            self.logger.info("Found match in dict")
             out_port = self.mac_to_port[dpid][dst]
+            match = datapath.ofproto_parser.OFPMatch(eth_src=src, eth_dst=dst, in_port=in_port)
             actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
         else:
             self.logger.info("Trying to flood the tree")
             dst_found = False
-            actions = self.update_actions(datapath, msg.in_port)
+            match = datapath.ofproto_parser.OFPMatch(in_port = in_port)
+            actions = self.update_actions(datapath, in_port)
 
         # install a flow to avoid packet_in next time
         if dst_found:
-            self.logger.info("Adding flow")
-            self.add_flow(datapath, msg.in_port, dst, src, actions)
+            self.logger.info(f"Adding flow with actions: {actions}")
+            self.add_flow(datapath, 1, match, actions)        
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
             data = msg.data
 
         out = datapath.ofproto_parser.OFPPacketOut(
-            datapath=datapath, buffer_id=msg.buffer_id, in_port=msg.in_port,
+            datapath=datapath, buffer_id=msg.buffer_id, in_port=in_port,
             actions=actions, data=data)
         
         datapath.send_msg(out)
@@ -313,7 +342,7 @@ class SimpleController(app_manager.RyuApp):
         neighbors = self.tree[dpid]
 
         out_ports = []
-        self.logger.info(f"On switch {dpid}, neighbors are {neighbors}")
+        # self.logger.info(f"On switch {dpid}, neighbors are {neighbors}")
 
         for neighbor in neighbors:
             if neighbor in self.switches:
@@ -325,13 +354,13 @@ class SimpleController(app_manager.RyuApp):
             elif neighbor in self.hosts:
                 link = self.host_links[(dpid, neighbor)]
                 out_ports.append(link.port.port_no)
-        
 
+        # self.logger.info("Outports:", out_ports)
         actions = []
         for out_port in out_ports:
             if out_port != in_port:
                 actions.append(datapath.ofproto_parser.OFPActionOutput(out_port))
-        print(actions)
+        # print(actions)
         return actions
 
     # @set_ev_cls(event.EventSwitchLeave)
