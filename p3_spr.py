@@ -1,12 +1,11 @@
+import struct
+import time
 from ryu.base import app_manager
 from ryu.controller import ofp_event, event
-from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER
-from ryu.controller.handler import set_ev_cls
+from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, DEAD_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
-from ryu.lib.packet import packet
-from ryu.lib.packet import ethernet
-from ryu.lib.packet import ether_types
-from ryu.app import simple_switch_13
+from ryu.lib import hub
+from ryu.lib.packet import packet, ethernet, ether_types, lldp
 from ryu.topology import event
 from ryu.topology.api import get_all_switch, get_all_link, get_all_host
 
@@ -20,11 +19,17 @@ class SimpleController(app_manager.RyuApp):
         self.hosts = {}
         self.host_links = {}      # Store hosts by MAC address
         self.switch_links = {}
+        self.link_delays = {}
         self.graph = {}
 
         self.mac_to_port = {}
         self.tree = {}      
-        # self.timeout = 1
+        
+        self.LLDP_INTERVAL = 10  # Time interval to send LLDP packets
+        self.LLDP_PERIOD = 2
+        self.start_time = time.time()
+        self.lldp_thread = None
+        self.LINK_DISCOVERY = False
 
     def request_flow_stats(self, datapath):
         """Sends a request to get all flow stats from the switch."""
@@ -94,7 +99,7 @@ class SimpleController(app_manager.RyuApp):
         self.process_links(links, graph, switch_links)
         hosts = get_all_host(self)
         self.process_hosts(hosts, graph, host_links, host_dict)
-
+        
         root = switches[0]
         queue = [root]
         tree = {root: []}
@@ -125,25 +130,6 @@ class SimpleController(app_manager.RyuApp):
         self.hosts = host_dict
         self.host_links = host_links
         self.switch_links = switch_links
-        
-        # for switch in switch_dps:
-        #     self.logger.info(f"Clearing flow table for switch {switch.dp.id}")
-        #     self.request_flow_stats(switch.dp)
-        
-        # for node, neighbors in tree.items():
-        #     if node in switches:
-        #         dp = switch_dict[node].dp
-        #         self.logger.info(f"DPID: {dp.id}")
-        #         for neighbor in neighbors:
-        #             if neighbor in switches:
-        #                 switch_link = switch_links[(node, neighbor)]
-        #                 neighbor_dp = switch_dict[neighbor].dp
-        #                 # self.logger.info(f"Adding switch flow between {dp.id} and {neighbor_dp.id}")
-        #                 self.add_switch_flow(dp, neighbor_dp, 'switch', switch_link)
-        #             elif neighbor in host_dict:
-        #                 h_link = host_links[(node, neighbor)]
-        #                 # self.logger.info(f"Adding host flow between {dp.id} and {h_link.mac}")
-        #                 self.add_switch_flow(dp, host_dict[neighbor], 'host', h_link)
 
     def process_hosts(self, hosts, graph, host_links, host_dict):
         for host in hosts:
@@ -189,67 +175,21 @@ class SimpleController(app_manager.RyuApp):
             else:
                 graph[dst.dpid].append(src.dpid)
 
-    def add_switch_flow(self, datapath, neighbor_dp, neighbor_type, link_info):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-        dp_id = datapath.id  # Get the DPID of the current switch
-
-        # Match and action details
-        match = None
-        actions = None
-
-        if neighbor_type == 'switch':
-            self.logger.info(f"Adding switch flow between {dp_id} and {neighbor_dp.id}")
-            # Determine the correct input and output ports based on whether datapath is link.src or link.dst
-            if dp_id == link_info.src.dpid:
-                in_port = link_info.src.port_no
-                out_port = link_info.dst.port_no
-            elif dp_id == link_info.dst.dpid:
-                in_port = link_info.dst.port_no
-                out_port = link_info.src.port_no
-            else:
-                self.logger.error(f"Link mismatch for datapath {dp_id}")
-                return  # Exit if the datapath is neither the source nor the destination
-            # Match all traffic coming from in_port and forward it to out_port
-            match = parser.OFPMatch(in_port=in_port)  # Match traffic from this input port
-            actions = [parser.OFPActionOutput(out_port)]  # Forward to output port
-
-        elif neighbor_type == 'host':
-            self.logger.info(f"Adding host flow between {dp_id} and {link_info.mac}")
-            out_port = link_info.port.port_no
-            # Neighbor is a host, forward traffic to the host's port
-            host_mac = link_info.mac
-            match = parser.OFPMatch(eth_dst=host_mac)  # Match traffic destined for the host
-            actions = [parser.OFPActionOutput(out_port)]
-
-        # Install the flow to forward traffic through the appropriate port
-        if match and actions:
-            self.install_flow(datapath, match, actions)
-
-    def install_flow(self, datapath, match, actions, priority=1):
-        """Helper function to install flows on the switch."""
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        # Instruction to apply actions (forward traffic)
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-
-        # Create and send the flow modification message to the switch
-        flow_mod = parser.OFPFlowMod(
-            datapath=datapath,
-            priority=priority,
-            match=match,
-            instructions=inst
-        )
-
-        datapath.send_msg(flow_mod)
-        self.logger.info(f"Flow installed on switch {datapath.id} for match {match}")
-
     @set_ev_cls(event.EventSwitchEnter)
-    def switch_enter_handler(self, ev):
+    def _switch_enter_handler(self, ev):
         dpid = ev.switch.dp.id
+        if not self.lldp_thread:
+            # Start LLDP process after the first switch connects
+            self.lldp_thread = hub.spawn(self._send_lldp_packets)
+            self.LINK_DISCOVERY = True
+        # self.switches[dpid] = ev.switch.dp
         self.logger.info(f"Switch entered: {dpid}")
-        self.create_spanning_tree()
+
+    @set_ev_cls(event.EventHostAdd)
+    def host_add_handler(self, ev):
+        host = ev.host
+        # self.hosts[host.mac] = host
+        self.logger.info(f"Host entered: {host}")
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -275,13 +215,6 @@ class SimpleController(app_manager.RyuApp):
                                 match=match, instructions=inst)
         datapath.send_msg(mod)
 
-    @set_ev_cls(event.EventHostAdd)
-    def host_add_handler(self, ev):
-        host = ev.host
-        # self.switches[dpid] = datapath
-        self.logger.info(f"Host entered: {host}")
-        self.create_spanning_tree()
-
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         # self.logger.info(f"Packet handler called, tree is {self.tree}")
@@ -292,9 +225,10 @@ class SimpleController(app_manager.RyuApp):
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
 
-        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
-            # ignore lldp packet
-            # self.logger.info("LLDP packet")
+        if self.LINK_DISCOVERY:
+            if eth.ethertype == ether_types.ETH_TYPE_LLDP:
+                # self.logger.info("LLDP packet")
+                self._handle_lldp(pkt, msg)
             return
         
         dst = eth.dst
@@ -362,3 +296,128 @@ class SimpleController(app_manager.RyuApp):
                 actions.append(datapath.ofproto_parser.OFPActionOutput(out_port))
         # print(actions)
         return actions
+
+    def _state_change_handler(self, ev):
+        dp = ev.datapath
+        if ev.state == MAIN_DISPATCHER:
+            self.switches[dp.id] = dp
+        # elif ev.state == DEAD_DISPATCHER:
+        #     if dp.id in self.switches:
+        #         del self.switches[dp.id]
+
+    def _send_lldp_packets(self):
+        while True:
+            self.logger.info(f"Sending LLDP packets at time {time.time() - self.start_time}")
+            switches = get_all_switch(self)
+            for switch in switches:
+                self._send_lldp(switch.dp)
+            hub.sleep(self.LLDP_PERIOD)
+            if time.time() - self.start_time > self.LLDP_INTERVAL:
+                self.LINK_DISCOVERY = False
+                self.logger.info("Link discovery complete at time: %s", time.time() - self.start_time)
+                # self.create_spanning_tree()
+                break
+
+    def _send_lldp(self, datapath):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        dpid = datapath.id
+
+        for port in datapath.ports.values():
+            # Create an LLDP packet with a timestamp
+            pkt = packet.Packet()
+            eth = ethernet.ethernet(dst=lldp.LLDP_MAC_NEAREST_BRIDGE, ethertype=ether_types.ETH_TYPE_LLDP)
+            pkt.add_protocol(eth)
+
+            dpid_bytes = str(dpid).encode('utf-8')
+
+            # Create LLDP packet components
+            chassis_id = lldp.ChassisID(
+                subtype=lldp.ChassisID.SUB_LOCALLY_ASSIGNED,
+                chassis_id=dpid_bytes  # Use the DPID as the chassis ID
+            )
+
+            port_id_tlv = lldp.PortID(
+                subtype=lldp.PortID.SUB_LOCALLY_ASSIGNED,
+                port_id=str(port.port_no).encode('utf-8')  # Use the port ID as necessary
+            )
+
+            ttl = lldp.TTL(ttl=120)
+
+            # Pack the current timestamp as a double (8 bytes)
+            timestamp = struct.pack('!d', time.time()) 
+            oui_bytes = struct.pack('!I', 0x123456)[1:]
+            # Create the custom TLV with the packed timestamp
+            custom_tlv = lldp.OrganizationallySpecific(
+                oui=oui_bytes,  # Use a valid OUI for your organization
+                subtype=0x01,  # Subtype for this TLV
+                info=timestamp  # Use the packed timestamp directly
+            )
+
+            # Create the full LLDP packet with the custom TLV
+            lldp_pkt = lldp.lldp(tlvs=[chassis_id, port_id_tlv, ttl, custom_tlv, lldp.End()])
+
+            pkt.add_protocol(lldp_pkt)
+            pkt.serialize()
+
+            # Send the LLDP packet out of the switch port
+            data = pkt.data
+            actions = [parser.OFPActionOutput(port.port_no)]
+            out = parser.OFPPacketOut(
+                datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER, in_port=ofproto.OFPP_CONTROLLER,
+                actions=actions, data=data
+            )
+            datapath.send_msg(out)
+
+    def _handle_lldp(self, pkt, msg):
+        # Extract the LLDP packet from the received packet
+        lldp_pkt = pkt.get_protocol(lldp.lldp)
+
+        # Verify that we have a valid LLDP packet
+        if lldp_pkt is None:
+            self.logger.warning("Received packet is not an LLDP packet")
+            return
+        
+        src_dpid = msg.datapath.id
+        neighbor_add = None
+        timestamp = None
+
+        for tlv in lldp_pkt.tlvs:
+            if isinstance(tlv, lldp.ChassisID):
+                try:
+                    neighbor_add = int(tlv.chassis_id.decode('utf-8'))
+                except ValueError:
+                    self.logger.warning(f"Failed to decode chassis_id: {tlv.chassis_id}")
+                    break
+            elif isinstance(tlv, lldp.OrganizationallySpecific):
+                try:
+                    # Unpack the timestamp from the custom TLV
+                    timestamp = struct.unpack('!d', tlv.info)[0]
+                except:
+                    self.logger.warning("Failed to unpack timestamp from custom TLV")
+                    pass
+
+        if neighbor_add is not None and timestamp is not None:
+            current_time = time.time()
+            delay = current_time - timestamp
+
+            # Determine if neighbor_add is a DPID (switch) or a host MAC
+            try:
+                # Try to convert neighbor_add to an integer (DPID)
+                neighbor_dpid = int(neighbor_add)
+                # Switch-to-switch link
+                self.link_delays[(src_dpid, neighbor_dpid)] = delay
+                self.link_delays[(neighbor_dpid, src_dpid)] = delay
+                self.logger.info(f"Stored link delay for switches {src_dpid} and {neighbor_dpid}: {delay} seconds")
+            except ValueError:
+                # If conversion to int fails, it's a host MAC address
+                host_mac = neighbor_add
+                # Host-to-switch link
+                self.link_delays[(host_mac, src_dpid)] = delay
+                self.link_delays[(src_dpid, host_mac)] = delay
+                self.logger.info(f"Stored link delay for host {host_mac} and switch {src_dpid}: {delay} seconds")
+
+            
+
+            
