@@ -8,6 +8,7 @@ from ryu.lib import hub
 from ryu.lib.packet import packet, ethernet, ether_types, lldp
 from ryu.topology import event
 from ryu.topology.api import get_all_switch, get_all_link, get_all_host
+from heapq import heappush, heappop
 
 class SimpleController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -21,6 +22,7 @@ class SimpleController(app_manager.RyuApp):
         self.switch_links = {}
         self.link_delays = {}
         self.graph = {}
+        self.shortest_paths = {}
 
         self.mac_to_port = {}
         self.tree = {}      
@@ -85,7 +87,7 @@ class SimpleController(app_manager.RyuApp):
         datapath.send_msg(flow_mod)
         self.logger.info(f"Deleted flow: {match}")
 
-    def create_spanning_tree(self):
+    def create_shortest_path_tree(self):
         graph = {}
         switch_links = {}
         host_links = {}
@@ -99,37 +101,41 @@ class SimpleController(app_manager.RyuApp):
         self.process_links(links, graph, switch_links)
         hosts = get_all_host(self)
         self.process_hosts(hosts, graph, host_links, host_dict)
-        
-        root = switches[0]
-        queue = [root]
-        tree = {root: []}
-        visited = set([root])
 
-        while queue:
-            node = queue.pop(0)
-            for neighbor in graph[node]:
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    queue.append(neighbor)
-
-                    if node in tree:
-                        tree[node].append(neighbor)
-                    else:
-                        tree[node] = [neighbor]
-
-                    if neighbor in tree:
-                        tree[neighbor].append(node)
-                    else:
-                        tree[neighbor] = [node]
-        
-        self.logger.info(tree)
-
-        self.tree = tree
         self.graph = graph
         self.switches = switch_dict
         self.hosts = host_dict
         self.host_links = host_links
         self.switch_links = switch_links
+
+        # self.logger.info(f"Graph: {self.graph}")
+        
+        for src in self.hosts.keys():
+            dist = {src: 0}
+            path = {src: []}
+            pq = []
+
+            heappush(pq, (0, src))
+            while pq:
+                delay, node = heappop(pq)
+                if node in dist and delay > dist[node]:
+                    continue
+                for neighbor in graph[node]:
+                    new_delay = delay
+                    if (node, neighbor) in self.link_delays:
+                        new_delay = delay + self.link_delays[(node, neighbor)]
+                    if neighbor not in dist or new_delay < dist[neighbor]:
+                        dist[neighbor] = new_delay
+                        if neighbor in self.hosts.keys():
+                            path[neighbor] = path[node]
+                        else:
+                            path[neighbor] = path[node] + [neighbor]
+                        heappush(pq, (new_delay, neighbor))
+            
+            for dst in path.keys():
+                self.shortest_paths[(src, dst)] = path[dst]
+
+        # self.logger.info(f"Shortest paths: {self.shortest_paths}")
 
     def process_hosts(self, hosts, graph, host_links, host_dict):
         for host in hosts:
@@ -152,8 +158,6 @@ class SimpleController(app_manager.RyuApp):
     def process_switches(self, switches, graph, switch_dict):
         for switch in switches:
             switch_dict[switch.dp.id] = switch
-            if switch.dp.id not in graph:
-                graph[switch.dp.id] = []
 
     def process_links(self, links, graph, switch_links):
         for link in links:
@@ -167,14 +171,14 @@ class SimpleController(app_manager.RyuApp):
             
             if src.dpid not in graph:
                 graph[src.dpid] = [dst.dpid]
-            else:
+            elif dst.dpid not in graph[src.dpid]:
                 graph[src.dpid].append(dst.dpid)
             
             if dst.dpid not in graph:
                 graph[dst.dpid] = [src.dpid]
-            else:
+            elif src.dpid not in graph[dst.dpid]:
                 graph[dst.dpid].append(src.dpid)
-
+        
     @set_ev_cls(event.EventSwitchEnter)
     def _switch_enter_handler(self, ev):
         dpid = ev.switch.dp.id
@@ -230,37 +234,41 @@ class SimpleController(app_manager.RyuApp):
                 # self.logger.info("LLDP packet")
                 self._handle_lldp(pkt, msg)
             return
+
+        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
+            return
         
         dst = eth.dst
         src = eth.src
 
         dpid = datapath.id
-        self.mac_to_port.setdefault(dpid, {})
-
         in_port = msg.match['in_port']
+        out_port = None
+        next_dpid = None
 
-        # self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
+        # self.logger.info(f"Shortest paths: {self.shortest_paths}")
+        if (src, dst) not in self.shortest_paths:
+            return
 
-        # learn a mac address to avoid FLOOD next time.
-        self.mac_to_port[dpid][src] = in_port
-        dst_found = True
-
-        if dst in self.mac_to_port[dpid]:
-            # self.logger.info("Found match in dict")
-            out_port = self.mac_to_port[dpid][dst]
-            match = datapath.ofproto_parser.OFPMatch(eth_src=src, eth_dst=dst, in_port=in_port)
-            actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
-        else:
-            # self.logger.info("Trying to flood the tree")
-            dst_found = False
-            match = datapath.ofproto_parser.OFPMatch(in_port = in_port)
-            actions = self.update_actions(datapath, in_port)
-
-        # install a flow to avoid packet_in next time
-        if dst_found:
-            self.logger.info(f"Adding flow with actions: {actions}")
-            self.add_flow(datapath, 1, match, actions)        
-
+        self.logger.info(f"Packet in: {src} -> {dst} on switch {dpid}")
+        shortest_path = self.shortest_paths[(src, dst)]
+        for i, id in enumerate(shortest_path):
+            if id == dpid and i < len(shortest_path) - 1:
+                next_dpid = shortest_path[i + 1]
+                link = self.switch_links[(dpid, next_dpid)]
+                if link.src.dpid == dpid:
+                    out_port = link.src.port_no
+                else:
+                    out_port = link.dst.port_no
+                break
+        
+        if next_dpid is None:
+            next_dpid = dst
+            out_port = self.host_links[(dpid, dst)].port.port_no  
+        
+        match = datapath.ofproto_parser.OFPMatch(eth_dst=dst, eth_src=src)
+        actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
+        self.add_flow(datapath, 1, match, actions)
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
             data = msg.data
@@ -315,7 +323,7 @@ class SimpleController(app_manager.RyuApp):
             if time.time() - self.start_time > self.LLDP_INTERVAL:
                 self.LINK_DISCOVERY = False
                 self.logger.info("Link discovery complete at time: %s", time.time() - self.start_time)
-                # self.create_spanning_tree()
+                self.create_shortest_path_tree()
                 break
 
     def _send_lldp(self, datapath):
