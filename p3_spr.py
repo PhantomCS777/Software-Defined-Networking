@@ -5,7 +5,7 @@ from ryu.controller import ofp_event, event
 from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, DEAD_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib import hub
-from ryu.lib.packet import packet, ethernet, ether_types, lldp
+from ryu.lib.packet import packet, ethernet, ether_types, lldp, arp
 from ryu.topology import event
 from ryu.topology.api import get_all_switch, get_all_link, get_all_host
 from heapq import heappush, heappop
@@ -247,10 +247,28 @@ class SimpleController(app_manager.RyuApp):
         next_dpid = None
 
         # self.logger.info(f"Shortest paths: {self.shortest_paths}")
+        # if (src, dst) not in self.shortest_paths:
+        try:
+            arp_pkt = pkt.get_protocol(arp.arp)
+            if arp_pkt:
+                # self.logger.info(f"Flooding ARP packet: {arp_pkt}")
+                out_port = ofproto.OFPP_FLOOD
+                actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
+                data = None
+                if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+                    data = msg.data
+                out = datapath.ofproto_parser.OFPPacketOut(
+                    datapath=datapath, buffer_id=msg.buffer_id, in_port=in_port,
+                    actions=actions, data=data)
+                datapath.send_msg(out)
+                return
+        except:
+            pass
+
         if (src, dst) not in self.shortest_paths:
             return
 
-        self.logger.info(f"Packet in: {src} -> {dst} on switch {dpid}")
+        # self.logger.info(f"Packet in: {src} -> {dst} on switch {dpid}")
         shortest_path = self.shortest_paths[(src, dst)]
         for i, id in enumerate(shortest_path):
             if id == dpid and i < len(shortest_path) - 1:
@@ -396,14 +414,14 @@ class SimpleController(app_manager.RyuApp):
                 try:
                     neighbor_add = int(tlv.chassis_id.decode('utf-8'))
                 except ValueError:
-                    self.logger.warning(f"Failed to decode chassis_id: {tlv.chassis_id}")
+                    # self.logger.warning(f"Failed to decode chassis_id: {tlv.chassis_id}")
                     break
             elif isinstance(tlv, lldp.OrganizationallySpecific):
                 try:
                     # Unpack the timestamp from the custom TLV
                     timestamp = struct.unpack('!d', tlv.info)[0]
                 except:
-                    self.logger.warning("Failed to unpack timestamp from custom TLV")
+                    # self.logger.warning("Failed to unpack timestamp from custom TLV")
                     pass
 
         if neighbor_add is not None and timestamp is not None:
