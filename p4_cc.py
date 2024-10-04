@@ -6,6 +6,7 @@ from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER, DEAD_DISP
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib import hub
 from ryu.lib.packet import packet, ethernet, ether_types, lldp, arp
+from ryu.ofproto import ether
 from ryu.topology import event
 from ryu.topology.api import get_all_switch, get_all_link, get_all_host
 from heapq import heappush, heappop
@@ -27,57 +28,10 @@ class SimpleController(app_manager.RyuApp):
         self.mac_to_port = {}
         self.tree = {}      
         
-        self.LLDP_INTERVAL = 10  # Time interval to send LLDP packets
-        self.LLDP_PERIOD = 2
+        # self.LLDP_INTERVAL = 10  # Time interval to send LLDP packets
+        self.LLDP_PERIOD = 5
         self.start_time = time.time()
         self.lldp_thread = None
-        self.LINK_DISCOVERY = False
-
-    def create_spanning_tree(self):
-        graph = {}
-        switch_links = {}
-        host_links = {}
-        host_dict = {}
-        switch_dict = {}
-
-        switch_dps = get_all_switch(self)
-        self.process_switches(switch_dps, graph, switch_dict)
-        switches = [switch.dp.id for switch in switch_dps]
-        links = get_all_link(self)
-        self.process_links(links, graph, switch_links)
-        hosts = get_all_host(self)
-        self.process_hosts(hosts, graph, host_links, host_dict)
-
-        root = switches[0]
-        queue = [root]
-        tree = {root: []}
-        visited = set([root])
-
-        while queue:
-            node = queue.pop(0)
-            for neighbor in graph[node]:
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    queue.append(neighbor)
-
-                    if node in tree:
-                        tree[node].append(neighbor)
-                    else:
-                        tree[node] = [neighbor]
-
-                    if neighbor in tree:
-                        tree[neighbor].append(node)
-                    else:
-                        tree[neighbor] = [node]
-        
-        # self.logger.info(tree)
-
-        self.tree = tree
-        self.graph = graph
-        self.switches = switch_dict
-        self.hosts = host_dict
-        self.host_links = host_links
-        self.switch_links = switch_links
 
     def create_shortest_path_tree(self):
         graph = {}
@@ -181,18 +135,17 @@ class SimpleController(app_manager.RyuApp):
         if not self.lldp_thread:
             # Start LLDP process after the first switch connects
             self.lldp_thread = hub.spawn(self._send_lldp_packets)
-            self.LINK_DISCOVERY = True
+        
         # self.switches[dpid] = ev.switch.dp
         self.logger.info(f"Switch entered: {dpid}")
 
     @set_ev_cls(event.EventHostAdd)
     def host_add_handler(self, ev):
         host = ev.host
+        # self.hosts[host.mac] = host
         if not self.lldp_thread:
             # Start LLDP process after the first switch connects
             self.lldp_thread = hub.spawn(self._send_lldp_packets)
-            self.LINK_DISCOVERY = True
-        # self.hosts[host.mac] = host
         self.logger.info(f"Host entered: {host}")
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -229,13 +182,9 @@ class SimpleController(app_manager.RyuApp):
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
 
-        if self.LINK_DISCOVERY:
-            if eth.ethertype == ether_types.ETH_TYPE_LLDP:
-                # self.logger.info("LLDP packet")
-                self._handle_lldp(pkt, msg)
-            return
-
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
+            # self.logger.info("LLDP packet")
+            self._handle_lldp(pkt, msg)
             return
         
         dst = eth.dst
@@ -246,13 +195,13 @@ class SimpleController(app_manager.RyuApp):
         out_port = None
         next_dpid = None
 
-        # self.logger.info(f"Shortest paths: {self.shortest_paths}")
-        # if (src, dst) not in self.shortest_paths:
         try:
             arp_pkt = pkt.get_protocol(arp.arp)
             if arp_pkt:
-                # self.logger.info(f"Flooding ARP packet: {arp_pkt}")
-                actions = self.update_actions(datapath, in_port)
+                tim = time.time()
+                # self.logger.info(f"Flooding ARP packet: {arp_pkt} at time {tim}")
+                out_port = ofproto.OFPP_FLOOD
+                actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
                 data = None
                 if msg.buffer_id == ofproto.OFP_NO_BUFFER:
                     data = msg.data
@@ -326,6 +275,9 @@ class SimpleController(app_manager.RyuApp):
         dp = ev.datapath
         if ev.state == MAIN_DISPATCHER:
             self.switches[dp.id] = dp
+        # elif ev.state == DEAD_DISPATCHER:
+        #     if dp.id in self.switches:
+        #         del self.switches[dp.id]
 
     def _send_lldp_packets(self):
         while True:
@@ -334,13 +286,7 @@ class SimpleController(app_manager.RyuApp):
             for switch in switches:
                 self._send_lldp(switch.dp)
             hub.sleep(self.LLDP_PERIOD)
-            if time.time() - self.start_time > self.LLDP_INTERVAL:
-                self.LINK_DISCOVERY = False
-                self.logger.info("Link discovery complete at time: %s", time.time() - self.start_time)
-                self.create_spanning_tree()
-                self.create_shortest_path_tree()
-                self.lldp_thread = None
-                break
+            self.create_shortest_path_tree()
 
     def _send_lldp(self, datapath):
         ofproto = datapath.ofproto
@@ -423,8 +369,7 @@ class SimpleController(app_manager.RyuApp):
                     pass
 
         if neighbor_add is not None and timestamp is not None:
-            current_time = time.time()
-            delay = current_time - timestamp
+            delay = float(time.time() - timestamp)
 
             # Determine if neighbor_add is a DPID (switch) or a host MAC
             try:
@@ -433,14 +378,14 @@ class SimpleController(app_manager.RyuApp):
                 # Switch-to-switch link
                 self.link_delays[(src_dpid, neighbor_dpid)] = delay
                 self.link_delays[(neighbor_dpid, src_dpid)] = delay
-                self.logger.info(f"Stored link delay for switches {src_dpid} and {neighbor_dpid}: {delay} seconds")
+                # self.logger.info(f"Stored link delay for switches {src_dpid} and {neighbor_dpid}: {delay} seconds")
             except ValueError:
                 # If conversion to int fails, it's a host MAC address
                 host_mac = neighbor_add
                 # Host-to-switch link
                 self.link_delays[(host_mac, src_dpid)] = delay
                 self.link_delays[(src_dpid, host_mac)] = delay
-                self.logger.info(f"Stored link delay for host {host_mac} and switch {src_dpid}: {delay} seconds")
+                # self.logger.info(f"Stored link delay for host {host_mac} and switch {src_dpid}: {delay} seconds")
 
             
 

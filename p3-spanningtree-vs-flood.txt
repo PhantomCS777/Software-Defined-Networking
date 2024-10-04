@@ -1,0 +1,136 @@
+(sdn) (base) vedant@vedant-ASUSVB:~/Desktop/Coursework/networks/Software-Defined-Networking$ sudo python3 p3_topo.py 
+*** Creating network
+*** Adding hosts:
+h1 h2 h3 h4 
+*** Adding switches:
+s1 s2 s3 s4 
+*** Adding links:
+(h1, s1) (h2, s2) (h3, s3) (h4, s4) (2.00Mbit 20ms delay) (2.00Mbit 20ms delay) (s1, s2) (2.00Mbit 10ms delay) (2.00Mbit 10ms delay) (s2, s3) (1.00Mbit 20ms delay) (1.00Mbit 20ms delay) (s3, s4) (1.00Mbit 150ms delay) (1.00Mbit 150ms delay) (s4, s1) 
+*** Configuring hosts
+h1 h2 h3 h4 
+*** Starting controller
+
+*** Starting 4 switches
+s1 s2 s3 s4 ...(2.00Mbit 20ms delay) (1.00Mbit 150ms delay) (2.00Mbit 20ms delay) (2.00Mbit 10ms delay) (2.00Mbit 10ms delay) (1.00Mbit 20ms delay) (1.00Mbit 20ms delay) (1.00Mbit 150ms delay) 
+(2.00Mbit 20ms delay) (1.00Mbit 150ms delay) (2.00Mbit 20ms delay) (2.00Mbit 10ms delay) (2.00Mbit 10ms delay) (1.00Mbit 20ms delay) (1.00Mbit 20ms delay) (1.00Mbit 150ms delay) *** Starting CLI:
+mininet> pingall
+*** Ping: testing ping reachability
+h1 -> h2 h3 h4 
+h2 -> h1 h3 h4 
+h3 -> h1 h2 h4 
+h4 -> h1 h2 h3 
+*** Results: 0% dropped (12/12 received)
+mininet> sh sudo tcpdump -i s1-eth1
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on s1-eth1, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+16:03:58.300022 LLDP, length 46
+16:03:59.200750 LLDP, length 46
+16:04:00.100647 LLDP, length 46
+^C
+3 packets captured
+3 packets received by filter
+0 packets dropped by kernel
+mininet> 
+*** Stopping 1 controllers
+c0 
+*** Stopping 8 links
+........
+*** Stopping 4 switches
+s1 s2 s3 s4 
+*** Stopping 4 hosts
+h1 h2 h3 h4 
+*** Done
+(sdn) (base) vedant@vedant-ASUSVB:~/Desktop/Coursework/networks/Software-Defined-Networking$ sudo python3 p3_topo.py 
+*** Creating network
+*** Adding hosts:
+h1 h2 h3 h4 
+*** Adding switches:
+s1 s2 s3 s4 
+*** Adding links:
+(h1, s1) (h2, s2) (h3, s3) (h4, s4) (2.00Mbit 20ms delay) (2.00Mbit 20ms delay) (s1, s2) (2.00Mbit 10ms delay) (2.00Mbit 10ms delay) (s2, s3) (1.00Mbit 20ms delay) (1.00Mbit 20ms delay) (s3, s4) (1.00Mbit 150ms delay) (1.00Mbit 150ms delay) (s4, s1) 
+*** Configuring hosts
+h1 h2 h3 h4 
+*** Starting controller
+
+*** Starting 4 switches
+s1 s2 s3 s4 ...(2.00Mbit 20ms delay) (1.00Mbit 150ms delay) (2.00Mbit 20ms delay) (2.00Mbit 10ms delay) (2.00Mbit 10ms delay) (1.00Mbit 20ms delay) (1.00Mbit 20ms delay) (1.00Mbit 150ms delay) 
+(2.00Mbit 20ms delay) (1.00Mbit 150ms delay) (2.00Mbit 20ms delay) (2.00Mbit 10ms delay) (2.00Mbit 10ms delay) (1.00Mbit 20ms delay) (1.00Mbit 20ms delay) (1.00Mbit 150ms delay) *** Starting CLI:
+mininet> pingall
+*** Ping: testing ping reachability
+h1 -> h2 h3 h4 
+h2 -> h1 h3 h4 
+h3 -> h1 h2 h4 
+h4 -> h1 h2 h3 
+*** Results: 0% dropped (12/12 received)
+mininet> sh sudo tcpdump -i s1-eth1
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on s1-eth1, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+16:04:47.000674 LLDP, length 46
+16:04:47.016329 ARP, Request who-has 10.0.0.4 tell 10.0.0.2, length 28
+16:04:47.025455 ARP, Reply 10.0.0.3 is-at 12:b1:ed:ce:86:da (oui Unknown), length 28
+16:04:47.046692 ARP, Request who-has 10.0.0.4 tell 10.0.0.3, length 28
+16:04:47.076877 ARP, Reply 10.0.0.2 is-at a6:e8:88:c5:9e:75 (oui Unknown), length 28
+16:04:47.077918 ARP, Request who-has 10.0.0.2 tell 10.0.0.1, length 28
+16:04:47.079696 ARP, Request who-has 10.0.0.2 tell 10.0.0.1, length 28
+16:04:47.096405 ARP, Reply 10.0.0.4 is-at 5a:0b:f9:53:4f:08 (oui Unknown), length 28
+16:04:47.099453 ARP, Request who-has 10.0.0.4 tell 10.0.0.1, length 28
+16:04:47.100792 ARP, Request who-has 10.0.0.4 tell 10.0.0.1, length 28
+16:04:47.120491 ARP, Reply 10.0.0.2 is-at a6:e8:88:c5:9e:75 (oui Unknown), length 28
+16:04:47.133738 ARP, Request who-has 10.0.0.3 tell 10.0.0.2, length 28
+16:04:47.163475 ARP, Reply 10.0.0.3 is-at 12:b1:ed:ce:86:da (oui Unknown), length 28
+16:04:47.165720 ARP, Request who-has 10.0.0.3 tell 10.0.0.1, length 28
+16:04:47.166886 ARP, Request who-has 10.0.0.3 tell 10.0.0.1, length 28
+16:04:47.176106 ARP, Request who-has 10.0.0.3 tell 10.0.0.2, length 28
+16:04:47.177556 ARP, Request who-has 10.0.0.4 tell 10.0.0.2, length 28
+16:04:47.185713 ARP, Request who-has 10.0.0.4 tell 10.0.0.3, length 28
+16:04:47.204300 ARP, Reply 10.0.0.4 is-at 5a:0b:f9:53:4f:08 (oui Unknown), length 28
+16:04:47.219419 ARP, Request who-has 10.0.0.4 tell 10.0.0.2, length 28
+16:04:47.228283 ARP, Reply 10.0.0.3 is-at 12:b1:ed:ce:86:da (oui Unknown), length 28
+16:04:47.251463 ARP, Request who-has 10.0.0.4 tell 10.0.0.3, length 28
+16:04:47.281529 ARP, Reply 10.0.0.2 is-at a6:e8:88:c5:9e:75 (oui Unknown), length 28
+16:04:47.282116 ARP, Request who-has 10.0.0.2 tell 10.0.0.1, length 28
+16:04:47.283315 ARP, Request who-has 10.0.0.2 tell 10.0.0.1, length 28
+16:04:47.301473 ARP, Reply 10.0.0.4 is-at 5a:0b:f9:53:4f:08 (oui Unknown), length 28
+16:04:47.304117 ARP, Request who-has 10.0.0.4 tell 10.0.0.1, length 28
+16:04:47.304826 ARP, Request who-has 10.0.0.4 tell 10.0.0.1, length 28
+16:04:47.324426 ARP, Reply 10.0.0.2 is-at a6:e8:88:c5:9e:75 (oui Unknown), length 28
+16:04:47.337790 ARP, Request who-has 10.0.0.3 tell 10.0.0.2, length 28
+16:04:47.367435 ARP, Reply 10.0.0.3 is-at 12:b1:ed:ce:86:da (oui Unknown), length 28
+16:04:47.369835 ARP, Request who-has 10.0.0.3 tell 10.0.0.1, length 28
+16:04:47.370520 ARP, Request who-has 10.0.0.3 tell 10.0.0.1, length 28
+16:04:47.380528 ARP, Request who-has 10.0.0.3 tell 10.0.0.2, length 28
+16:04:47.381101 ARP, Request who-has 10.0.0.4 tell 10.0.0.2, length 28
+16:04:47.390229 ARP, Request who-has 10.0.0.4 tell 10.0.0.3, length 28
+16:04:47.407659 ARP, Reply 10.0.0.4 is-at 5a:0b:f9:53:4f:08 (oui Unknown), length 28
+16:04:47.424356 ARP, Request who-has 10.0.0.4 tell 10.0.0.2, length 28
+16:04:47.433152 ARP, Reply 10.0.0.3 is-at 12:b1:ed:ce:86:da (oui Unknown), length 28
+16:04:47.455470 ARP, Request who-has 10.0.0.4 tell 10.0.0.3, length 28
+16:04:47.484714 ARP, Reply 10.0.0.2 is-at a6:e8:88:c5:9e:75 (oui Unknown), length 28
+16:04:47.485961 ARP, Request who-has 10.0.0.2 tell 10.0.0.1, length 28
+16:04:47.486797 ARP, Request who-has 10.0.0.2 tell 10.0.0.1, length 28
+16:04:47.504906 ARP, Reply 10.0.0.4 is-at 5a:0b:f9:53:4f:08 (oui Unknown), length 28
+16:04:47.507903 ARP, Request who-has 10.0.0.4 tell 10.0.0.1, length 28
+16:04:47.508640 ARP, Request who-has 10.0.0.4 tell 10.0.0.1, length 28
+16:04:47.528350 ARP, Reply 10.0.0.2 is-at a6:e8:88:c5:9e:75 (oui Unknown), length 28
+16:04:47.541705 ARP, Request who-has 10.0.0.3 tell 10.0.0.2, length 28
+16:04:47.571189 ARP, Reply 10.0.0.3 is-at 12:b1:ed:ce:86:da (oui Unknown), length 28
+16:04:47.574003 ARP, Request who-has 10.0.0.3 tell 10.0.0.1, length 28
+16:04:47.574419 ARP, Request who-has 10.0.0.3 tell 10.0.0.1, length 28
+16:04:47.584134 ARP, Request who-has 10.0.0.3 tell 10.0.0.2, length 28
+16:04:47.584633 ARP, Request who-has 10.0.0.4 tell 10.0.0.2, length 28
+16:04:47.595899 ARP, Request who-has 10.0.0.4 tell 10.0.0.3, length 28
+16:04:47.611908 ARP, Reply 10.0.0.4 is-at 5a:0b:f9:53:4f:08 (oui Unknown), length 28
+^C
+55 packets captured
+57 packets received by filter
+0 packets dropped by kernel
+mininet> 
+*** Stopping 1 controllers
+c0 
+*** Stopping 8 links
+........
+*** Stopping 4 switches
+s1 s2 s3 s4 
+*** Stopping 4 hosts
+h1 h2 h3 h4 
+*** Done

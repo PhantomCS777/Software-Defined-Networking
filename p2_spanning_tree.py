@@ -26,60 +26,6 @@ class SimpleController(app_manager.RyuApp):
         self.tree = {}      
         # self.timeout = 1
 
-    def request_flow_stats(self, datapath):
-        """Sends a request to get all flow stats from the switch."""
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        req = parser.OFPFlowStatsRequest(datapath)
-        datapath.send_msg(req)
-        self.logger.info("Sent flow stats request")
-
-    @set_ev_cls(ofp_event.EventOFPFlowStatsRequest, MAIN_DISPATCHER)
-    def flow_stats_request_handler(self, ev):
-        print("Handling flow stats reply")
-        """Handles the flow stats reply from the switch and deletes non-controller flows."""
-        datapath = ev.msg.datapath
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        flows_to_keep = []
-        flows_to_delete = []
-
-        # Iterate through all flows received in the stats reply
-        for stat in ev.msg.body:
-            for instruction in stat.instructions:
-                for action in instruction.actions:
-                    if isinstance(action, parser.OFPActionOutput) and action.port == ofproto.OFPP_CONTROLLER:
-                        # If the flow outputs to the controller, keep it
-                        flows_to_keep.append(stat)
-                    else:
-                        # Otherwise, mark it for deletion
-                        flows_to_delete.append(stat)
-        
-        # print("Keep:", flows_to_keep)
-        # print("Delete:", flows_to_delete)
-
-        # Delete the flows not related to the controller
-        for flow in flows_to_delete:
-            match = flow.match
-            self.delete_flow(datapath, match)
-
-    def delete_flow(self, datapath, match):
-        """Delete flow matching the given match object."""
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        flow_mod = parser.OFPFlowMod(
-            datapath=datapath,
-            command=ofproto.OFPFC_DELETE,
-            out_port=ofproto.OFPP_ANY,
-            out_group=ofproto.OFPG_ANY,
-            match=match
-        )
-        datapath.send_msg(flow_mod)
-        self.logger.info(f"Deleted flow: {match}")
-
     def create_spanning_tree(self):
         graph = {}
         switch_links = {}
@@ -125,25 +71,6 @@ class SimpleController(app_manager.RyuApp):
         self.hosts = host_dict
         self.host_links = host_links
         self.switch_links = switch_links
-        
-        # for switch in switch_dps:
-        #     self.logger.info(f"Clearing flow table for switch {switch.dp.id}")
-        #     self.request_flow_stats(switch.dp)
-        
-        # for node, neighbors in tree.items():
-        #     if node in switches:
-        #         dp = switch_dict[node].dp
-        #         self.logger.info(f"DPID: {dp.id}")
-        #         for neighbor in neighbors:
-        #             if neighbor in switches:
-        #                 switch_link = switch_links[(node, neighbor)]
-        #                 neighbor_dp = switch_dict[neighbor].dp
-        #                 # self.logger.info(f"Adding switch flow between {dp.id} and {neighbor_dp.id}")
-        #                 self.add_switch_flow(dp, neighbor_dp, 'switch', switch_link)
-        #             elif neighbor in host_dict:
-        #                 h_link = host_links[(node, neighbor)]
-        #                 # self.logger.info(f"Adding host flow between {dp.id} and {h_link.mac}")
-        #                 self.add_switch_flow(dp, host_dict[neighbor], 'host', h_link)
 
     def process_hosts(self, hosts, graph, host_links, host_dict):
         for host in hosts:

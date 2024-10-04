@@ -31,7 +31,7 @@ class CustomTopo(Topo):
         self.addLink(s1, s2, bw=2, delay='20ms', cls=TCLink)
         self.addLink(s2, s3, bw=2, delay='10ms', cls=TCLink)
         self.addLink(s3, s4, bw=1, delay='20ms', cls=TCLink)
-        self.addLink(s4, s1, bw=1, delay='15ms', cls=TCLink)
+        self.addLink(s4, s1, bw=1, delay='150ms', cls=TCLink)
 
 def run():
     # Initialize the network with the custom topology
