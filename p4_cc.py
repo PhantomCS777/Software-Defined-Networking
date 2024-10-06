@@ -30,8 +30,54 @@ class SimpleController(app_manager.RyuApp):
         
         # self.LLDP_INTERVAL = 10  # Time interval to send LLDP packets
         self.LLDP_PERIOD = 5
-        self.start_time = time.time()
+        self.start_time = None
         self.lldp_thread = None
+    
+    def create_spanning_tree(self):
+        graph = {}
+        switch_links = {}
+        host_links = {}
+        host_dict = {}
+        switch_dict = {}
+
+        switch_dps = get_all_switch(self)
+        self.process_switches(switch_dps, graph, switch_dict)
+        switches = [switch.dp.id for switch in switch_dps]
+        links = get_all_link(self)
+        self.process_links(links, graph, switch_links)
+        hosts = get_all_host(self)
+        self.process_hosts(hosts, graph, host_links, host_dict)
+
+        root = switches[0]
+        queue = [root]
+        tree = {root: []}
+        visited = set([root])
+
+        while queue:
+            node = queue.pop(0)
+            for neighbor in graph[node]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+
+                    if node in tree:
+                        tree[node].append(neighbor)
+                    else:
+                        tree[node] = [neighbor]
+
+                    if neighbor in tree:
+                        tree[neighbor].append(node)
+                    else:
+                        tree[neighbor] = [node]
+        
+        # self.logger.info(tree)
+
+        self.tree = tree
+        self.graph = graph
+        self.switches = switch_dict
+        self.hosts = host_dict
+        self.host_links = host_links
+        self.switch_links = switch_links
 
     def create_shortest_path_tree(self):
         graph = {}
@@ -85,7 +131,7 @@ class SimpleController(app_manager.RyuApp):
             for dst in path.keys():
                 self.shortest_paths[(src, dst)] = path[dst]
 
-        # self.logger.info(f"Shortest paths: {self.shortest_paths}")
+        self.logger.info(f"Shortest paths: {self.shortest_paths}")
 
     def process_hosts(self, hosts, graph, host_links, host_dict):
         for host in hosts:
@@ -132,6 +178,8 @@ class SimpleController(app_manager.RyuApp):
     @set_ev_cls(event.EventSwitchEnter)
     def _switch_enter_handler(self, ev):
         dpid = ev.switch.dp.id
+        if not self.start_time:
+            self.start_time = time.time()
         if not self.lldp_thread:
             # Start LLDP process after the first switch connects
             self.lldp_thread = hub.spawn(self._send_lldp_packets)
@@ -142,6 +190,8 @@ class SimpleController(app_manager.RyuApp):
     @set_ev_cls(event.EventHostAdd)
     def host_add_handler(self, ev):
         host = ev.host
+        if not self.start_time:
+            self.start_time = time.time()
         # self.hosts[host.mac] = host
         if not self.lldp_thread:
             # Start LLDP process after the first switch connects
@@ -200,8 +250,7 @@ class SimpleController(app_manager.RyuApp):
             if arp_pkt:
                 tim = time.time()
                 # self.logger.info(f"Flooding ARP packet: {arp_pkt} at time {tim}")
-                out_port = ofproto.OFPP_FLOOD
-                actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
+                actions = self.flood_tree(datapath, in_port)
                 data = None
                 if msg.buffer_id == ofproto.OFP_NO_BUFFER:
                     data = msg.data
@@ -245,7 +294,7 @@ class SimpleController(app_manager.RyuApp):
         
         datapath.send_msg(out)
 
-    def update_actions(self, datapath, in_port):
+    def flood_tree(self, datapath, in_port):
         dpid = datapath.id
         neighbors = self.tree[dpid]
 
@@ -286,6 +335,7 @@ class SimpleController(app_manager.RyuApp):
             for switch in switches:
                 self._send_lldp(switch.dp)
             hub.sleep(self.LLDP_PERIOD)
+            self.create_spanning_tree()
             self.create_shortest_path_tree()
 
     def _send_lldp(self, datapath):
@@ -378,14 +428,14 @@ class SimpleController(app_manager.RyuApp):
                 # Switch-to-switch link
                 self.link_delays[(src_dpid, neighbor_dpid)] = delay
                 self.link_delays[(neighbor_dpid, src_dpid)] = delay
-                # self.logger.info(f"Stored link delay for switches {src_dpid} and {neighbor_dpid}: {delay} seconds")
+                self.logger.info(f"Stored link delay for switches {src_dpid} and {neighbor_dpid}: {delay} seconds")
             except ValueError:
                 # If conversion to int fails, it's a host MAC address
                 host_mac = neighbor_add
                 # Host-to-switch link
                 self.link_delays[(host_mac, src_dpid)] = delay
                 self.link_delays[(src_dpid, host_mac)] = delay
-                # self.logger.info(f"Stored link delay for host {host_mac} and switch {src_dpid}: {delay} seconds")
+                self.logger.info(f"Stored link delay for host {host_mac} and switch {src_dpid}: {delay} seconds")
 
             
 
